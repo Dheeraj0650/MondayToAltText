@@ -5,7 +5,7 @@ const bodyParser = require("body-parser");
 require('dotenv').config();
 
 const app = express();
-const port = process.env.PORT || 3003;
+const port = process.env.PORT || 3004;
 
 const access_token = process.env.CANVAS_ACCESS_TOKEN;
 const monday_api_key = process.env.MONDAY_API_KEY;
@@ -14,56 +14,120 @@ const base_url = "https://usu.instructure.com/api/v1";
 app.use(bodyParser.json()); //Handles JSON requests
 app.use(bodyParser.urlencoded({extended:true}));
 
-function getInstructorName(course_id) {
+function getNextPageUrl(linkHeader) {
+    try {
+      console.log("---- changing to next page ----")
+      const links = linkHeader.split(',');
+      for (const link of links) {
+          const [url, rel] = link.split('; ');
+          if (rel.includes('next')) {
+              return url.slice(1, -1); // Remove angle brackets around URL
+          }
+      }
+      return null; // No next page link
+    }
+    catch(err){
+      console.log(err)
+    }
+}
+
+async function getInstructorName(courseId) {
     const headers = {
         "Authorization": `Bearer ${access_token}`
     };
 
     const params = {
-        "per_page": 500
+        "per_page": 500  // Number of pages to retrieve per request
     };
 
-    const all_discussions = [];
-    let url = `${base_url}/courses/${course_id}/search_users?enrollment_type=teacher`;
+    const allDiscussions = [];
+    let url = `${base_url}/courses/${courseId}/search_users?enrollment_type=teacher`;
 
-    return axios.get(url, { headers, params })
-        .then(response => {
+    while (url) {
+        try {
+            const response = await axios.get(url, {
+                headers: headers,
+                params: params
+            });
+
             const pages = response.data;
-            all_discussions.push(...pages);
+            allDiscussions.push(...pages);
 
-            url = response.headers.link ? response.headers.link.split(';')[0].slice(1, -1) : null;
-
-            if (url) {
-                return getInstructorNameHelper(url, headers, params, all_discussions);
+            // Check if there are more pages
+            const nextPageUrl = getNextPageUrl(response.headers.link);
+            if (nextPageUrl) {
+                url = nextPageUrl;
             } else {
-                return all_discussions[0]['name'];
+                break; // No more pages
             }
-        })
-        .catch(error => {
-            console.error(error);
-            throw error;
-        });
+        } catch (error) {
+            console.error(`Error fetching: ${error}`);
+            break;
+        }
+    }
+
+    return allDiscussions[0].name;
 }
 
-function getInstructorNameHelper(url, headers, params, all_discussions) {
-    return axios.get(url, { headers, params })
-        .then(response => {
-            const pages = response.data;
-            all_discussions.push(...pages);
 
-            url = response.headers.link ? response.headers.link.split(';')[0].slice(1, -1) : null;
+// function getInstructorName(course_id) {
+//     const headers = {
+//         "Authorization": `Bearer ${access_token}`
+//     };
 
-            if (url) {
-                return getInstructorNameHelper(url, headers, params, all_discussions);
-            } else {
-                return all_discussions[0]['name'];
-            }
-        })
-        .catch(error => {
-            console.error(error);
-            throw error;
-        });
-}
+//     const params = {
+//         "per_page": 500
+//     };
+
+//     const all_discussions = [];
+//     let url = `${base_url}/courses/${course_id}/search_users?enrollment_type=teacher`;
+//     console.log("check 1")
+
+//     return axios.get(url, { headers, params })
+//         .then(response => {
+//             const pages = response.data;
+//             all_discussions.push(...pages);
+
+//             url = response.headers.link ? response.headers.link.split(';')[0].slice(1, -1) : null;
+//             console.log("check 2")
+//             if (url) {
+//                 console.log("check 7")
+//                 return getInstructorNameHelper(url, headers, params, all_discussions);
+//             } else {
+//                 console.log("check 3")
+
+//                 return all_discussions[0]['name'];
+//             }
+//         })
+//         .catch(error => {
+//             console.error(error);
+//             throw error;
+//         });
+// }
+
+// function getInstructorNameHelper(url, headers, params, all_discussions) {
+//     console.log(url)
+//     return axios.get(url, { headers, params })
+//         .then(response => {
+//             const pages = response.data;
+//             all_discussions.push(...pages);
+//             console.log(response.links)
+//             console.log(response.headers)
+//             url = response.headers.link ? response.headers.link.split(';')[0].slice(1, -1) : null;
+
+//             if (url) {
+//                 console.log("check 10")
+//                 return getInstructorNameHelper(url, headers, params, all_discussions);
+//             } else {
+//                 console.log(all_discussions[0]['name']);
+//                 return all_discussions[0]['name'];
+//             }
+//         })
+//         .catch(error => {
+//             console.error(error);
+//             throw error;
+//         });
+// }
 
 function uploadFileToS3(bucket_name, file_key, data_dict, s3_client) {
     const params = {
@@ -95,7 +159,7 @@ function addOrGetValuesOfBoard(action) {
 }
 
 function makePostRequestToAltText(courseId, courseIsPriority) {
-    const url = "https://accessibility.accessapps.link/load_images";
+    const url = "http://applications.accessapps.link:3003/load_images";
     const headers = {
         'Content-Type': 'application/json'
     };
@@ -181,6 +245,8 @@ async function manageUnusableImage(req) {
         "text56": req["course_name"],
         'text94': await getInstructorName(req['course_id'])
     };
+    console.log("check 5")
+    console.log(column_value);
     const addNewURLDataQuery = `mutation {
         create_item (board_id: 5241649933, group_id: "topics", item_name: ${JSON.stringify(req["image_name"])}, column_values: ${JSON.stringify(JSON.stringify(column_value))}) {
             id
@@ -298,7 +364,7 @@ async function updateMondayBoardDoneStatus(bodyJSON) {
 
     let item_id = 0;
     console.log(bodyJSON);
-
+    console.log(action === "updateMondayBoard");
     if (action === "updateMondayBoard") {
         const getBoardDataQuery = `query{
             boards (ids:1206883120){
@@ -389,7 +455,7 @@ app.post('/main', async (req, res) => {
         bodyJSON = JSON.parse(req.body);
     }
 
-    console.log('tables' in bodyJSON);
+    console.log('mark_as_unusable' in bodyJSON);
     console.log(bodyJSON);
 
     if (bodyJSON !== null && 'mark_as_unusable' in bodyJSON) {
@@ -419,5 +485,5 @@ app.post('/main', async (req, res) => {
 });
 
 app.listen(port, () => {
-    console.log("server running on port 3003");
+    console.log("server running on port 3004");
 });
